@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>MURMURATION</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0a0a1a;
+    overflow: hidden;
+    font-family: Georgia, 'Times New Roman', serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #wrap {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: crosshair;
+  }
+  .hub-link {
+    position: fixed;
+    bottom: 10px;
+    right: 12px;
+    color: rgba(230, 220, 210, 0.35);
+    font-size: 12px;
+    text-decoration: none;
+    letter-spacing: 0.03em;
+    z-index: 50;
+    font-family: Georgia, serif;
+    transition: color 0.3s ease;
+    pointer-events: auto;
+  }
+  .hub-link:hover {
+    color: rgba(230, 220, 210, 0.7);
+  }
+  #muteBtn {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid rgba(230, 220, 210, 0.25);
+    background: rgba(20, 15, 30, 0.35);
+    color: rgba(230, 220, 210, 0.75);
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #f2ece2;
+    pointer-events: none;
+    transition: opacity 0.9s ease;
+  }
+  #overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #overlay .title {
+    font-size: min(15vw, 76px);
+    letter-spacing: 0.18em;
+    font-weight: 400;
+    margin: 0 0 14px 0;
+    text-shadow: 0 0 30px rgba(255, 190, 130, 0.35), 0 2px 12px rgba(0,0,0,0.5);
+  }
+  #overlay .tagline {
+    font-size: min(4vw, 18px);
+    letter-spacing: 0.03em;
+    opacity: 0.85;
+    margin: 0 0 30px 0;
+    font-style: italic;
+  }
+  #overlay .tap {
+    font-size: min(4.5vw, 20px);
+    letter-spacing: 0.12em;
+    opacity: 0.7;
+    animation: pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.9; }
+  }
+  #hud {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+    color: #f2ece2;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+  }
+  #hud .corner {
+    position: absolute;
+    top: 14px;
+    padding: 6px 2px;
+    line-height: 1.5;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+  }
+  #hud .left { left: 16px; text-align: left; }
+  #hud .right { right: 60px; text-align: right; }
+  #hud .big { font-size: 20px; opacity: 0.95; }
+  #hud .small { font-size: 12px; opacity: 0.7; }
+  #hud.hidden { display: none; }
+  #gameover {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #f2ece2;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 1.1s ease;
+    background: radial-gradient(ellipse at center, rgba(10,8,20,0.15) 0%, rgba(6,5,14,0.55) 100%);
+  }
+  #gameover.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #gameover h2 {
+    font-weight: 400;
+    letter-spacing: 0.15em;
+    font-size: min(8vw, 34px);
+    margin: 0 0 18px 0;
+    opacity: 0.95;
+  }
+  #gameover .stat {
+    font-size: min(4.5vw, 18px);
+    margin: 4px 0;
+    opacity: 0.85;
+  }
+  #gameover button {
+    margin-top: 26px;
+    padding: 12px 34px;
+    border-radius: 24px;
+    border: 1px solid rgba(242, 236, 226, 0.4);
+    background: rgba(242, 236, 226, 0.08);
+    color: #f2ece2;
+    font-size: 15px;
+    letter-spacing: 0.1em;
+    font-family: Georgia, serif;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  #gameover button:active {
+    background: rgba(242, 236, 226, 0.2);
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+</div>
+
+<div id="hud" class="hidden">
+  <div class="corner left">
+    <div class="big" id="hudRings">Rings 0</div>
+    <div class="small" id="hudCombo">Combo 0</div>
+  </div>
+  <div class="corner right">
+    <div class="big" id="hudFlock">300</div>
+    <div class="small">flock</div>
+  </div>
+</div>
+
+<div id="overlay">
+  <div class="title">MURMURATION</div>
+  <div class="tagline">Draw the sky. Thread the light. Escape the falcon.</div>
+  <div class="tap">tap to begin</div>
+</div>
+
+<div id="gameover">
+  <h2>THE FLOCK SCATTERS</h2>
+  <div class="stat" id="goRings">Rings threaded: 0</div>
+  <div class="stat" id="goBest">Best this session: 0</div>
+  <button id="replayBtn">fly again</button>
+</div>
+
+<button id="muteBtn" aria-label="mute">&#128266;</button>
+<a class="hub-link" href="HUB_URL_PLACEHOLDER">&#8962; The Aviary</a>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Canvas setup ----------
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d', { alpha: false });
+  var W = 0, H = 0, DPR = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    buildStaticScenery();
+  }
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', function () { setTimeout(resize, 200); });
+
+  // ---------- Device tiering ----------
+  var isCoarse = false;
+  try { isCoarse = window.matchMedia('(pointer: coarse)').matches; } catch (e) {}
+  var isSmall = Math.min(window.innerWidth, window.innerHeight) < 500;
+  var BOID_COUNT = (isCoarse && isSmall) ? 180 : 300;
+  var LOW_FLOCK_THRESHOLD = 60;
+
+  // ---------- Utility ----------
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function dist2(ax, ay, bx, by) { var dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
+
+  // ---------- WebAudio (created/resumed on first gesture) ----------
+  var audioCtx = null;
+  var masterGain = null;
+  var windGain = null;
+  var muted = false;
+
+  function initAudio() {
+    if (audioCtx) return;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AC();
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = muted ? 0 : 0.85;
+      masterGain.connect(audioCtx.destination);
+      startWindBed();
+    } catch (e) {
+      audioCtx = null;
+    }
+  }
+
+  function resumeAudio() {
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  }
+
+  function startWindBed() {
+    if (!audioCtx) return;
+    // Filtered noise bed for wind
+    var bufSize = 2 * audioCtx.sampleRate;
+    var buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    var data = buf.getChannelData(0);
+    var lastOut = 0;
+    for (var i = 0; i < bufSize; i++) {
+      var white = Math.random() * 2 - 1;
+      lastOut = (lastOut + 0.02 * white) / 1.02;
+      data[i] = lastOut * 3.2;
+    }
+    var src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    var filter = audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 340;
+    filter.Q.value = 0.6;
+    windGain = audioCtx.createGain();
+    windGain.gain.value = 0.05;
+    src.connect(filter);
+    filter.connect(windGain);
+    windGain.connect(masterGain);
+    src.start(0);
+
+    // slow LFO on wind volume for a breathing feel
+    var lfo = audioCtx.createOscillator();
+    lfo.frequency.value = 0.07;
+    var lfoGain = audioCtx.createGain();
+    lfoGain.gain.value = 0.025;
+    lfo.connect(lfoGain);
+    lfoGain.connect(windGain.gain);
+    lfo.start(0);
+  }
+
+  // Pentatonic scale for chime, rises with combo
+  var PENTA = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
+
+  function playChime(comboLevel) {
+    if (!audioCtx) return;
+    var idx = clamp(comboLevel, 0, PENTA.length - 1);
+    var base = PENTA[idx];
+    var now = audioCtx.currentTime;
+    [0, 1].forEach(function (h) {
+      var freq = base * (h === 0 ? 1 : 2);
+      var osc = audioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      var g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(h === 0 ? 0.22 : 0.09, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + (h === 0 ? 1.1 : 0.8));
+      osc.connect(g);
+      g.connect(masterGain);
+      osc.start(now);
+      osc.stop(now + 1.2);
+    });
+  }
+
+  function playFalconCry() {
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    var osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    var g = audioCtx.createGain();
+    var filter = audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1800, now);
+    filter.frequency.exponentialRampToValueAtTime(700, now + 0.5);
+    filter.Q.value = 3;
+    osc.frequency.setValueAtTime(1200, now);
+    osc.frequency.exponentialRampToValueAtTime(500, now + 0.45);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.16, now + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.6);
+  }
+
+  function playWarningTone(progress) {
+    // progress 0..1 across the warning window, called once at start (rising tone handled by envelope)
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    var osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    var g = audioCtx.createGain();
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.linearRampToValueAtTime(880, now + 1.15);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(0.09, now + 1.0);
+    g.gain.linearRampToValueAtTime(0.0001, now + 1.2);
+    osc.connect(g);
+    g.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 1.25);
+  }
+
+  function playFeatherThud() {
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    var bufSize = Math.floor(audioCtx.sampleRate * 0.15);
+    var buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    var data = buf.getChannelData(0);
+    for (var i = 0; i < bufSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 2);
+    }
+    var src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    var filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400;
+    var g = audioCtx.createGain();
+    g.gain.value = 0.35;
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(masterGain);
+    src.start(now);
+  }
+
+  // ---------- Input ----------
+  var pointer = { x: 0, y: 0, down: false, active: false };
+  var hasStarted = false;
+
+  function setPointerFromEvent(e) {
+    var rect = canvas.getBoundingClientRect();
+    var cx, cy;
+    if (e.touches && e.touches.length) {
+      cx = e.touches[0].clientX;
+      cy = e.touches[0].clientY;
+    } else {
+      cx = e.clientX;
+      cy = e.clientY;
+    }
+    pointer.x = cx - rect.left;
+    pointer.y = cy - rect.top;
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    initAudio();
+    resumeAudio();
+    setPointerFromEvent(e);
+    pointer.down = true;
+    pointer.active = true;
+    if (!hasStarted) {
+      hasStarted = true;
+      startGame();
+    }
+    if (gameState === 'gameover') {
+      // ignore, replay button handles restart
+    }
+  }
+  function onMove(e) {
+    if (!pointer.active && !pointer.down) { /* still track for hover-less feel on desktop */ }
+    setPointerFromEvent(e);
+    if (e.touches) e.preventDefault();
+  }
+  function onUp(e) {
+    pointer.down = false;
+  }
+
+  canvas.addEventListener('mousedown', onDown, { passive: false });
+  canvas.addEventListener('mousemove', onMove, { passive: false });
+  window.addEventListener('mouseup', onUp, { passive: false });
+  canvas.addEventListener('touchstart', onDown, { passive: false });
+  canvas.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('touchend', onUp, { passive: false });
+  window.addEventListener('touchcancel', onUp, { passive: false });
+
+  // ---------- Mute ----------
+  var muteBtn = document.getElementById('muteBtn');
+  muteBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    muted = !muted;
+    muteBtn.innerHTML = muted ? '&#128263;' : '&#128266;';
+    if (masterGain) masterGain.gain.value = muted ? 0 : 0.85;
+  });
+  // prevent mute button press from also steering flock
+  ['mousedown', 'touchstart'].forEach(function (evt) {
+    muteBtn.addEventListener(evt, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+
+  // ---------- Scenery (dusk sky, sun, reeds, clouds) ----------
+  var scenery = { skyCanvas: null, reedPoints: [], clouds: [] };
+
+  function buildStaticScenery() {
+    // Precompute reed silhouette shapes (relative x fractions, heights)
+    scenery.reedPoints = [];
+    var clumps = Math.max(18, Math.floor(W / 40));
+    for (var i = 0; i < clumps; i++) {
+      scenery.reedPoints.push({
+        xf: i / (clumps - 1) + rand(-0.02, 0.02),
+        h: rand(0.05, 0.16) * H,
+        w: rand(6, 14),
+        sway: rand(0, Math.PI * 2)
+      });
+    }
+    if (scenery.clouds.length === 0) {
+      var cloudCount = 5;
+      for (var c = 0; c < cloudCount; c++) {
+        scenery.clouds.push({
+          xf: Math.random(),
+          yf: rand(0.08, 0.32),
+          scale: rand(0.6, 1.5),
+          speed: rand(2, 5),
+          puffs: null
+        });
+      }
+    }
+  }
+
+  function drawSky() {
+    var grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#171335');
+    grad.addColorStop(0.35, '#2c1f4a');
+    grad.addColorStop(0.62, '#6a3358');
+    grad.addColorStop(0.82, '#c1583f');
+    grad.addColorStop(1, '#e0793f');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // low blurred sun
+    var sunX = W * 0.68;
+    var sunY = H * 0.72;
+    var sunR = Math.max(W, H) * 0.16;
+    var sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR);
+    sunGrad.addColorStop(0, 'rgba(255, 226, 170, 0.95)');
+    sunGrad.addColorStop(0.25, 'rgba(255, 190, 120, 0.55)');
+    sunGrad.addColorStop(0.6, 'rgba(230, 130, 90, 0.18)');
+    sunGrad.addColorStop(1, 'rgba(200, 90, 80, 0)');
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // sun core
+    var coreGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 0.22);
+    coreGrad.addColorStop(0, 'rgba(255, 244, 214, 0.9)');
+    coreGrad.addColorStop(1, 'rgba(255, 210, 150, 0)');
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawClouds(t) {
+    ctx.save();
+    scenery.clouds.forEach(function (cl) {
+      var x = ((cl.xf * W) + t * cl.speed) % (W + 300) - 150;
+      var y = cl.yf * H;
+      var s = cl.scale;
+      ctx.fillStyle = 'rgba(60, 45, 80, 0.22)';
+      for (var i = 0; i < 4; i++) {
+        var ox = i * 34 * s - 50 * s;
+        var oy = Math.sin(i * 1.7) * 8 * s;
+        ctx.beginPath();
+        ctx.ellipse(x + ox, y + oy, 40 * s, 16 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    ctx.restore();
+  }
+
+  function drawReeds(t) {
+    var baseY = H * 0.94;
+    ctx.fillStyle = '#0e0a1c';
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    ctx.lineTo(0, baseY);
+    for (var i = 0; i < scenery.reedPoints.length; i++) {
+      var r = scenery.reedPoints[i];
+      var x = r.xf * W;
+      var sway = Math.sin(t * 0.6 + r.sway) * 6;
+      ctx.lineTo(x + sway, baseY - r.h);
+    }
+    ctx.lineTo(W, baseY);
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+
+    // individual reed stalks on top for texture
+    ctx.strokeStyle = 'rgba(6, 4, 12, 0.9)';
+    ctx.lineWidth = 2;
+    for (var j = 0; j < scenery.reedPoints.length; j++) {
+      var rp = scenery.reedPoints[j];
+      var rx = rp.xf * W;
+      var sw = Math.sin(t * 0.6 + rp.sway) * 10;
+      ctx.beginPath();
+      ctx.moveTo(rx, baseY + 4);
+      ctx.quadraticCurveTo(rx + sw * 0.5, baseY - rp.h * 0.6, rx + sw, baseY - rp.h * 1.4);
+      ctx.stroke();
+    }
+
+    // foreground marsh band
+    var mgrad = ctx.createLinearGradient(0, baseY - 10, 0, H);
+    mgrad.addColorStop(0, '#0e0a1c');
+    mgrad.addColorStop(1, '#050308');
+    ctx.fillStyle = mgrad;
+    ctx.fillRect(0, baseY, W, H - baseY);
+  }
+
+  // roost silhouette (a tree/structure) used at game over
+  function drawRoost(t, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    var rx = W * 0.5, ry = H * 0.86;
+    ctx.strokeStyle = '#0a0714';
+    ctx.fillStyle = '#0a0714';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry + 60);
+    ctx.lineTo(rx - 6, ry - 40);
+    ctx.stroke();
+    // branches
+    var branches = [
+      [-40, -30, -20], [40, -20, -10], [-30, -60, -35], [35, -55, -50], [0, -80, -70]
+    ];
+    branches.forEach(function (b) {
+      ctx.beginPath();
+      ctx.moveTo(rx, ry + b[1] + 60);
+      ctx.lineTo(rx + b[0], ry + b[2] + 60);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // ---------- Spatial hash grid for boid neighbor lookups ----------
+  var GRID_CELL = 48;
+  var grid = new Map();
+
+  function gridKey(cx, cy) { return cx + ',' + cy; }
+
+  function rebuildGrid(boids) {
+    grid.clear();
+    for (var i = 0; i < boids.length; i++) {
+      var b = boids[i];
+      var cx = Math.floor(b.x / GRID_CELL);
+      var cy = Math.floor(b.y / GRID_CELL);
+      var key = gridKey(cx, cy);
+      var arr = grid.get(key);
+      if (!arr) { arr = []; grid.set(key, arr); }
+      arr.push(b);
+    }
+  }
+
+  function forEachNeighbor(b, radius, cb) {
+    var cx = Math.floor(b.x / GRID_CELL);
+    var cy = Math.floor(b.y / GRID_CELL);
+    var range = Math.max(1, Math.ceil(radius / GRID_CELL));
+    for (var dx = -range; dx <= range; dx++) {
+      for (var dy = -range; dy <= range; dy++) {
+        var arr = grid.get(gridKey(cx + dx, cy + dy));
+        if (!arr) continue;
+        for (var i = 0; i < arr.length; i++) {
+          if (arr[i] !== b) cb(arr[i]);
+        }
+      }
+    }
+  }
+
+  // ---------- Boids ----------
+  var boids = [];
+  var flockTarget = { x: 0, y: 0 };
+  var idleOrbit = { angle: 0, radius: 0 };
+
+  function makeBoid(x, y) {
+    return {
+      x: x, y: y,
+      vx: rand(-1, 1), vy: rand(-1, 1),
+      hue: rand(-1, 1), // -1..1 for iridescent flecks (purple to green)
+      tailX: [], tailY: [],
+      size: rand(2.6, 4.2),
+      wobble: rand(0, Math.PI * 2)
+    };
+  }
+
+  function initFlock() {
+    boids = [];
+    var cx = W * 0.5, cy = H * 0.35;
+    for (var i = 0; i < BOID_COUNT; i++) {
+      boids.push(makeBoid(cx + rand(-140, 140), cy + rand(-100, 100)));
+    }
+    flockTarget.x = cx;
+    flockTarget.y = cy;
+  }
+
+  var MAX_SPEED = 220;
+  var MAX_FORCE = 340;
+  var NEIGHBOR_R = 34;
+  var SEP_R = 16;
+
+  function updateBoids(dt, steering) {
+    rebuildGrid(boids);
+    var speedCap = MAX_SPEED;
+
+    for (var i = 0; i < boids.length; i++) {
+      var b = boids[i];
+      var sepX = 0, sepY = 0, aliX = 0, aliY = 0, cohX = 0, cohY = 0, count = 0, sepCount = 0;
+
+      forEachNeighbor(b, NEIGHBOR_R, function (o) {
+        var d2 = dist2(b.x, b.y, o.x, o.y);
+        if (d2 < NEIGHBOR_R * NEIGHBOR_R && d2 > 0.0001) {
+          aliX += o.vx; aliY += o.vy;
+          cohX += o.x; cohY += o.y;
+          count++;
+          if (d2 < SEP_R * SEP_R) {
+            var d = Math.sqrt(d2) || 0.001;
+            sepX += (b.x - o.x) / d;
+            sepY += (b.y - o.y) / d;
+            sepCount++;
+          }
+        }
+      });
+
+      var ax = 0, ay = 0;
+
+      if (sepCount > 0) {
+        ax += (sepX / sepCount) * 2.4;
+        ay += (sepY / sepCount) * 2.4;
+      }
+      if (count > 0) {
+        var avx = aliX / count, avy = aliY / count;
+        ax += (avx - b.vx) * 0.09;
+        ay += (avy - b.vy) * 0.09;
+        var comx = cohX / count, comy = cohY / count;
+        ax += (comx - b.x) * 0.028;
+        ay += (comy - b.y) * 0.028;
+      }
+
+      // seek toward steering target
+      if (steering.strength > 0) {
+        var tx = steering.x - b.x, ty = steering.y - b.y;
+        var td = Math.sqrt(tx * tx + ty * ty) || 0.001;
+        ax += (tx / td) * steering.strength;
+        ay += (ty / td) * steering.strength;
+      } else {
+        // gentle wander orbit when idle
+        b.wobble += dt * 0.6;
+        ax += Math.cos(b.wobble * 0.5 + b.hue) * 6;
+        ay += Math.sin(b.wobble * 0.5 + b.hue) * 6;
+      }
+
+      // falcon avoidance handled externally by nudging steering; keep bounds soft
+      var margin = 40;
+      if (b.x < margin) ax += (margin - b.x) * 0.5;
+      if (b.x > W - margin) ax -= (b.x - (W - margin)) * 0.5;
+      if (b.y < margin) ay += (margin - b.y) * 0.5;
+      if (b.y > H * 0.82 - margin) ay -= (b.y - (H * 0.82 - margin)) * 0.5;
+
+      // clamp force
+      var fmag = Math.sqrt(ax * ax + ay * ay);
+      if (fmag > MAX_FORCE) { ax = ax / fmag * MAX_FORCE; ay = ay / fmag * MAX_FORCE; }
+
+      b.vx += ax * dt;
+      b.vy += ay * dt;
+
+      var speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+      var minSpeed = 40;
+      if (speed > speedCap) { b.vx = b.vx / speed * speedCap; b.vy = b.vy / speed * speedCap; }
+      else if (speed < minSpeed && speed > 0.001) { b.vx = b.vx / speed * minSpeed; b.vy = b.vy / speed * minSpeed; }
+
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // trail
+      b.tailX.push(b.x); b.tailY.push(b.y);
+      if (b.tailX.length > 4) { b.tailX.shift(); b.tailY.shift(); }
+    }
+  }
+
+  function flockCenter() {
+    var sx = 0, sy = 0;
+    for (var i = 0; i < boids.length; i++) { sx += boids[i].x; sy += boids[i].y; }
+    if (boids.length === 0) return { x: W / 2, y: H / 2 };
+    return { x: sx / boids.length, y: sy / boids.length };
+  }
+
+  function drawBoids() {
+    for (var i = 0; i < boids.length; i++) {
+      var b = boids[i];
+      var speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 0.001;
+      var angle = Math.atan2(b.vy, b.vx);
+
+      // tail (short translucent stroke)
+      if (b.tailX.length > 1) {
+        ctx.strokeStyle = 'rgba(20, 16, 30, 0.25)';
+        ctx.lineWidth = b.size * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(b.tailX[0], b.tailY[0]);
+        for (var k = 1; k < b.tailX.length; k++) ctx.lineTo(b.tailX[k], b.tailY[k]);
+        ctx.stroke();
+      }
+
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(angle);
+
+      // body: teardrop/chevron shape
+      var s = b.size;
+      ctx.beginPath();
+      ctx.moveTo(s * 2.2, 0);
+      ctx.quadraticCurveTo(0, s * 1.1, -s * 1.8, s * 0.6);
+      ctx.quadraticCurveTo(-s * 0.6, 0, -s * 1.8, -s * 0.6);
+      ctx.quadraticCurveTo(0, -s * 1.1, s * 2.2, 0);
+      ctx.closePath();
+
+      var hueShift = b.hue;
+      var r, g, bl;
+      if (hueShift >= 0) {
+        r = lerp(18, 70, hueShift); g = lerp(14, 40, hueShift * 0.4); bl = lerp(28, 90, hueShift);
+      } else {
+        r = lerp(18, 30, -hueShift * 0.3); g = lerp(14, 60, -hueShift); bl = lerp(28, 40, -hueShift * 0.2);
+      }
+      ctx.fillStyle = 'rgba(' + (r|0) + ',' + (g|0) + ',' + (bl|0) + ', 0.92)';
+      ctx.fill();
+
+      // subtle iridescent fleck
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = hueShift >= 0 ? 'rgba(150,110,200,0.5)' : 'rgba(110,200,150,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(s * 0.3, 0, s * 0.7, s * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.restore();
+    }
+  }
+
+  // ---------- Rings of light ----------
+  var rings = [];
+  var RING_LIFETIME = 8;
+  var ringSpawnTimer = 0;
+
+  function spawnRing() {
+    var marginX = W * 0.1, marginY = H * 0.1;
+    var r = {
+      x: rand(marginX, W - marginX),
+      y: rand(marginY, H * 0.62 - marginY),
+      radius: rand(46, 72),
+      age: 0,
+      life: RING_LIFETIME,
+      threaded: false,
+      dead: false,
+      driftX: rand(-6, 6),
+      driftY: rand(-3, 3),
+      phase: rand(0, Math.PI * 2)
+    };
+    rings.push(r);
+  }
+
+  function updateRings(dt, fc, comboLevel) {
+    ringSpawnTimer -= dt;
+    if (ringSpawnTimer <= 0 && rings.filter(function (r) { return !r.dead; }).length < 3) {
+      spawnRing();
+      ringSpawnTimer = rand(3.5, 5.5);
+    }
+    for (var i = rings.length - 1; i >= 0; i--) {
+      var r = rings[i];
+      if (r.dead) {
+        r.fadeT = (r.fadeT || 0) + dt;
+        if (r.fadeT > 0.6) rings.splice(i, 1);
+        continue;
+      }
+      r.age += dt;
+      r.x += r.driftX * dt;
+      r.y += r.driftY * dt;
+      r.x = clamp(r.x, W * 0.06, W * 0.94);
+      r.y = clamp(r.y, H * 0.06, H * 0.6);
+
+      if (!r.threaded) {
+        var d2 = dist2(fc.x, fc.y, r.x, r.y);
+        if (d2 < r.radius * r.radius) {
+          r.threaded = true;
+          r.dead = true;
+          r.fadeT = 0;
+          onRingThreaded(r, comboLevel);
+        } else if (r.age > r.life) {
+          r.dead = true;
+          r.fadeT = 0;
+          onRingExpired();
+        }
+      }
+    }
+  }
+
+  function drawRings(t) {
+    for (var i = 0; i < rings.length; i++) {
+      var r = rings[i];
+      var alpha = 1;
+      if (r.dead) {
+        alpha = Math.max(0, 1 - (r.fadeT || 0) / 0.6);
+      } else if (r.age > r.life - 1.2) {
+        alpha = Math.max(0.15, 1 - (r.age - (r.life - 1.2)) / 1.2);
+      }
+      var pulse = 1 + Math.sin(t * 2 + r.phase) * 0.06;
+      var rad = r.radius * pulse;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      var glow = ctx.createRadialGradient(r.x, r.y, rad * 0.4, r.x, r.y, rad * 1.15);
+      glow.addColorStop(0, 'rgba(255, 244, 200, 0)');
+      glow.addColorStop(0.7, 'rgba(255, 230, 170, 0.10)');
+      glow.addColorStop(1, 'rgba(255, 230, 170, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, rad * 1.15, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = 'rgba(255, 240, 205, 0.85)';
+      ctx.shadowColor = 'rgba(255, 220, 150, 0.9)';
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+  }
+
+  // ---------- Motes (particles for ring burst) ----------
+  var motes = [];
+  function spawnMoteBurst(x, y) {
+    var n = 26;
+    for (var i = 0; i < n; i++) {
+      var a = (i / n) * Math.PI * 2 + rand(-0.2, 0.2);
+      var sp = rand(50, 160);
+      motes.push({
+        x: x, y: y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: 0, maxLife: rand(0.6, 1.1),
+        size: rand(1.5, 3.2)
+      });
+    }
+  }
+  function updateMotes(dt) {
+    for (var i = motes.length - 1; i >= 0; i--) {
+      var m = motes[i];
+      m.life += dt;
+      if (m.life > m.maxLife) { motes.splice(i, 1); continue; }
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      m.vx *= 0.94;
+      m.vy *= 0.94;
+    }
+  }
+  function drawMotes() {
+    for (var i = 0; i < motes.length; i++) {
+      var m = motes[i];
+      var a = 1 - m.life / m.maxLife;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(255, 244, 210, 0.95)';
+      ctx.shadowColor = 'rgba(255, 230, 170, 0.9)';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ---------- Feather particles (falcon strike) ----------
+  var feathers = [];
+  function spawnFeathers(x, y, count) {
+    for (var i = 0; i < count; i++) {
+      var a = rand(0, Math.PI * 2);
+      var sp = rand(30, 110);
+      feathers.push({
+        x: x + rand(-8, 8), y: y + rand(-8, 8),
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30,
+        rot: rand(0, Math.PI * 2), rotSpeed: rand(-4, 4),
+        life: 0, maxLife: rand(0.8, 1.5),
+        size: rand(3, 6)
+      });
+    }
+  }
+  function updateFeathers(dt) {
+    for (var i = feathers.length - 1; i >= 0; i--) {
+      var f = feathers[i];
+      f.life += dt;
+      if (f.life > f.maxLife) { feathers.splice(i, 1); continue; }
+      f.vy += 60 * dt;
+      f.vx *= 0.98;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.rot += f.rotSpeed * dt;
+    }
+  }
+  function drawFeathers() {
+    for (var i = 0; i < feathers.length; i++) {
+      var f = feathers[i];
+      var a = 1 - f.life / f.maxLife;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.rot);
+      ctx.fillStyle = 'rgba(40, 32, 50, 0.85)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, f.size, f.size * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ---------- Falcon ----------
+  var falcon = {
+    state: 'idle', // idle, warning, striking, done
+    timer: 0,
+    nextStrikeIn: rand(12, 20),
+    warnDuration: 1.2,
+    edge: 'left',
+    startX: 0, startY: 0, endX: 0, endY: 0,
+    progress: 0,
+    strikeDuration: 0.45,
+    targetPoint: null
+  };
+
+  function scheduleFalcon() {
+    falcon.state = 'idle';
+    falcon.timer = 0;
+    falcon.nextStrikeIn = rand(12, 20);
+  }
+
+  function beginWarning(fc) {
+    falcon.state = 'warning';
+    falcon.timer = 0;
+    var edges = ['left', 'right', 'top'];
+    falcon.edge = edges[Math.floor(rand(0, edges.length))];
+    var pad = 60;
+    if (falcon.edge === 'left') { falcon.startX = -pad; falcon.startY = rand(H * 0.1, H * 0.55); }
+    else if (falcon.edge === 'right') { falcon.startX = W + pad; falcon.startY = rand(H * 0.1, H * 0.55); }
+    else { falcon.startX = rand(W * 0.15, W * 0.85); falcon.startY = -pad; }
+
+    // aim through flock center, continue past it to the opposite side
+    falcon.targetPoint = { x: fc.x, y: fc.y };
+    var dx = fc.x - falcon.startX, dy = fc.y - falcon.startY;
+    var norm = Math.sqrt(dx * dx + dy * dy) || 1;
+    var overshoot = Math.max(W, H) * 0.9;
+    falcon.endX = falcon.startX + (dx / norm) * (norm + overshoot);
+    falcon.endY = falcon.startY + (dy / norm) * (norm + overshoot);
+
+    playWarningTone();
+  }
+
+  function updateFalcon(dt, fc) {
+    if (falcon.state === 'idle') {
+      falcon.timer += dt;
+      if (falcon.timer >= falcon.nextStrikeIn) {
+        beginWarning(fc);
+      }
+    } else if (falcon.state === 'warning') {
+      falcon.timer += dt;
+      if (falcon.timer >= falcon.warnDuration) {
+        falcon.state = 'striking';
+        falcon.progress = 0;
+        playFalconCry();
+      }
+    } else if (falcon.state === 'striking') {
+      falcon.progress += dt / falcon.strikeDuration;
+      if (falcon.progress >= 1) {
+        falcon.progress = 1;
+        finishStrike();
+      }
+    }
+  }
+
+  function falconPos() {
+    var t = falcon.progress;
+    return {
+      x: lerp(falcon.startX, falcon.endX, t),
+      y: lerp(falcon.startY, falcon.endY, t)
+    };
+  }
+
+  var KILL_RADIUS = 46;
+  var KILL_CAP = 12;
+  var slowMoTimer = 0;
+  var strikeHitAny = false;
+  var strikeMinDist = Infinity;
+
+  function checkFalconHits() {
+    if (falcon.state !== 'striking') return;
+    var pos = falconPos();
+    var killed = 0;
+    for (var i = boids.length - 1; i >= 0 && killed < KILL_CAP; i--) {
+      var b = boids[i];
+      var d2 = dist2(pos.x, pos.y, b.x, b.y);
+      if (d2 < strikeMinDist) strikeMinDist = Math.sqrt(d2);
+      if (d2 < KILL_RADIUS * KILL_RADIUS) {
+        spawnFeathers(b.x, b.y, 5);
+        boids.splice(i, 1);
+        killed++;
+        strikeHitAny = true;
+      }
+    }
+    if (killed > 0) {
+      playFeatherThud();
+      updateFlockCountUI();
+      comboCount = 0;
+    }
+  }
+
+  function finishStrike() {
+    // near miss slow-mo check
+    if (!strikeHitAny && strikeMinDist < KILL_RADIUS * 2.2) {
+      slowMoTimer = 0.3;
+    }
+    falcon.state = 'idle';
+    falcon.timer = 0;
+    falcon.nextStrikeIn = rand(12, 20);
+    strikeHitAny = false;
+    strikeMinDist = Infinity;
+  }
+
+  function drawFalconWarning(t) {
+    if (falcon.state !== 'warning') return;
+    var p = falcon.timer / falcon.warnDuration;
+    var alpha = 0.4 + 0.5 * Math.sin(t * 22) * (0.5 + 0.5 * p);
+    ctx.save();
+    ctx.globalAlpha = clamp(alpha, 0.15, 0.9);
+    var glowSize = 90 + p * 40;
+    var gx, gy;
+    if (falcon.edge === 'left') { gx = 0; gy = falcon.startY; }
+    else if (falcon.edge === 'right') { gx = W; gy = falcon.startY; }
+    else { gx = falcon.startX; gy = 0; }
+    var grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, glowSize);
+    grad.addColorStop(0, 'rgba(255, 60, 40, 0.9)');
+    grad.addColorStop(1, 'rgba(255, 60, 40, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(gx, gy, glowSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFalconStrike() {
+    if (falcon.state !== 'striking') return;
+    var pos = falconPos();
+    var angle = Math.atan2(falcon.endY - falcon.startY, falcon.endX - falcon.startX);
+
+    // motion streak
+    var trailLen = 160;
+    var tx = pos.x - Math.cos(angle) * trailLen;
+    var ty = pos.y - Math.sin(angle) * trailLen;
+    var grad = ctx.createLinearGradient(tx, ty, pos.x, pos.y);
+    grad.addColorStop(0, 'rgba(20, 16, 24, 0)');
+    grad.addColorStop(1, 'rgba(20, 16, 24, 0.85)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+
+    // falcon body (small chevron, bigger than boid)
+    ctx.save();
+    ctx.translate(pos.x, pos.y);
+    ctx.rotate(angle);
+    ctx.fillStyle = 'rgba(15, 12, 18, 0.95)';
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.quadraticCurveTo(0, 8, -12, 4);
+    ctx.quadraticCurveTo(-4, 0, -12, -4);
+    ctx.quadraticCurveTo(0, -8, 14, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ---------- Score / combo / game state ----------
+  var gameState = 'attract'; // attract, playing, gameover
+  var ringsThreaded = 0;
+  var comboCount = 0;
+  var bestScore = 0;
+  var flockCompressWave = 0; // visual pulse on near miss
+
+  function onRingThreaded(r, comboLevel) {
+    ringsThreaded++;
+    comboCount++;
+    spawnMoteBurst(r.x, r.y);
+    playChime(comboCount - 1);
+    updateHUD();
+  }
+  function onRingExpired() {
+    comboCount = 0;
+    updateHUD();
+  }
+
+  function updateHUD() {
+    document.getElementById('hudRings').textContent = 'Rings ' + ringsThreaded;
+    document.getElementById('hudCombo').textContent = 'Combo ' + comboCount;
+  }
+  function updateFlockCountUI() {
+    document.getElementById('hudFlock').textContent = boids.length;
+  }
+
+  // ---------- Game flow ----------
+  var overlayEl = document.getElementById('overlay');
+  var hudEl = document.getElementById('hud');
+  var gameoverEl = document.getElementById('gameover');
+
+  function startGame() {
+    gameState = 'playing';
+    ringsThreaded = 0;
+    comboCount = 0;
+    rings = [];
+    motes = [];
+    feathers = [];
+    ringSpawnTimer = rand(1.5, 3);
+    scheduleFalcon();
+    initFlock();
+    updateHUD();
+    updateFlockCountUI();
+    overlayEl.classList.add('hidden');
+    hudEl.classList.remove('hidden');
+    gameoverEl.classList.remove('show');
+  }
+
+  function endGame() {
+    gameState = 'gameover';
+    if (ringsThreaded > bestScore) bestScore = ringsThreaded;
+    document.getElementById('goRings').textContent = 'Rings threaded: ' + ringsThreaded;
+    document.getElementById('goBest').textContent = 'Best this session: ' + bestScore;
+    hudEl.classList.add('hidden');
+    setTimeout(function () {
+      gameoverEl.classList.add('show');
+    }, 1400);
+  }
+
+  document.getElementById('replayBtn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    gameoverEl.classList.remove('show');
+    startGame();
+  });
+  ['mousedown', 'touchstart'].forEach(function (evt) {
+    document.getElementById('replayBtn').addEventListener(evt, function (e) { e.stopPropagation(); }, { passive: false });
+  });
+
+  // ---------- Attract mode init ----------
+  function initAttractFlock() {
+    boids = [];
+    var cx = W * 0.5, cy = H * 0.4;
+    var n = Math.min(BOID_COUNT, 220);
+    for (var i = 0; i < n; i++) {
+      boids.push(makeBoid(cx + rand(-160, 160), cy + rand(-120, 120)));
+    }
+  }
+
+  // ---------- Main loop ----------
+  var lastTime = null;
+  var simTime = 0;
+  var MAX_DT = 1 / 30; // fixed-timestep cap
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (lastTime === null) lastTime = ts;
+    var dt = (ts - lastTime) / 1000;
+    lastTime = ts;
+    if (dt > MAX_DT) dt = MAX_DT;
+    if (dt < 0) dt = 0;
+
+    var effDt = dt;
+    if (slowMoTimer > 0) {
+      effDt = dt * 0.25;
+      slowMoTimer -= dt;
+    }
+    simTime += effDt;
+
+    // ---- update ----
+    var steering = { x: pointer.x, y: pointer.y, strength: 0 };
+    if (gameState === 'playing') {
+      if (pointer.down) {
+        steering.strength = 260;
+      }
+      updateBoids(effDt, steering);
+      var fc = flockCenter();
+      updateRings(effDt, fc, comboCount);
+      updateFalcon(effDt, fc);
+      checkFalconHits();
+      if (boids.length < LOW_FLOCK_THRESHOLD) {
+        endGame();
+      }
+    } else if (gameState === 'attract') {
+      steering.strength = 0;
+      updateBoids(effDt, steering);
+    } else if (gameState === 'gameover') {
+      // let survivors drift toward roost gently
+      var roostX = W * 0.5, roostY = H * 0.86;
+      var s2 = { x: roostX, y: roostY, strength: 40 };
+      updateBoids(effDt, s2);
+    }
+    updateMotes(effDt);
+    updateFeathers(effDt);
+
+    // ---- draw ----
+    drawSky();
+    drawClouds(simTime);
+    drawBoids();
+    if (gameState === 'playing') {
+      drawRings(simTime);
+      drawFalconWarning(simTime);
+    }
+    drawMotes();
+    drawFeathers();
+    if (gameState === 'playing') {
+      drawFalconStrike();
+    }
+    drawReeds(simTime);
+    if (gameState === 'gameover') {
+      drawRoost(simTime, 0.9);
+    }
+
+    // vignette
+    drawVignette();
+  }
+
+  function drawVignette() {
+    ctx.save();
+    var grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  // ---------- Boot ----------
+  resize();
+  initAttractFlock();
+  requestAnimationFrame(frame);
+
+  // Safety: if boids array shrinks due to initial resize before flock set, guard
+  if (boids.length === 0) initAttractFlock();
+
+})();
+</script>
+</body>
+</html>
