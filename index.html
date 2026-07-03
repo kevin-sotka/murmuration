@@ -246,6 +246,7 @@
   var audioCtx = null;
   var masterGain = null;
   var windGain = null;
+  var scoreGain = null;   // sub-bus for the generative music score (under master, so mute kills it)
   var muted = false;
 
   function initAudio() {
@@ -256,7 +257,12 @@
       masterGain = audioCtx.createGain();
       masterGain.gain.value = muted ? 0 : 0.85;
       masterGain.connect(audioCtx.destination);
+      // dedicated bus for the score; ducking/intensity ride this node, mute rides master
+      scoreGain = audioCtx.createGain();
+      scoreGain.gain.value = 0.0001;
+      scoreGain.connect(masterGain);
       startWindBed();
+      startScore();
     } catch (e) {
       audioCtx = null;
     }
@@ -304,13 +310,421 @@
     lfo.start(0);
   }
 
-  // Pentatonic scale for chime, rises with combo
-  var PENTA = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
+  // ======================================================================
+  //  GENERATIVE AMBIENT SCORE
+  //  Dusk over a marsh: slow ambient in A Aeolian (A natural minor).
+  //  Two/three detuned pad voices under a small consonant progression, a
+  //  soft FM marsh-bell pluck for color, plus reactive voices driven by the
+  //  game state. One lookahead scheduler on the AudioContext clock feeds it.
+  // ======================================================================
 
+  // A2 is the tonal floor; the whole score is expressed as MIDI note numbers
+  // so voice leading is just integer arithmetic.
+  function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+  // A natural minor scale degrees as MIDI offsets from A (0=A,2=B,3=C,5=D,7=E,8=F,10=G)
+  var SCALE_A_AEOLIAN = [0, 2, 3, 5, 7, 8, 10];
+  var A_ROOT = 45; // MIDI A2
+
+  // Progression: i - III - VII - iv (Am - C - G - Dm), voice-led.
+  // Each chord is three voiced MIDI notes chosen to move one step at a time
+  // between neighbours (common tones held, single-note motion elsewhere).
+  // Root offset is relative to A_ROOT; pentatonic subset drives the pluck.
+  var PROGRESSION = [
+    { name: 'i',   root: 45, voices: [57, 60, 64], penta: [57, 60, 62, 64, 67] }, // Am : A C E  | pent A C D E G
+    { name: 'III', root: 48, voices: [55, 60, 64], penta: [55, 60, 62, 64, 67] }, // C  : G C E  | pent C D E G A
+    { name: 'VII', root: 43, voices: [55, 59, 62], penta: [55, 59, 62, 64, 67] }, // G  : G B D  | pent G A B D E
+    { name: 'iv',  root: 50, voices: [57, 62, 65], penta: [57, 60, 62, 65, 69] }  // Dm : A D F  | pent D F A C(+) ... voiced A D F
+  ];
+  var PLAGAL_RESOLVE = { name: 'I', root: 45, voices: [57, 61, 64], penta: [57, 61, 64, 69, 71] }; // A major-ish plagal color for the roost
+
+  // ---- Score state (read by reactive hooks and the scheduler) ----
+  var score = {
+    started: false,
+    chordIdx: 0,
+    chordDur: 12.0,          // seconds per chord (8-16s felt)
+    nextChordTime: 0,        // AudioContext time of the next chord change
+    nextPluckTime: 0,        // AudioContext time of the next pluck event
+    lookahead: 0.15,         // schedule this far ahead (s)
+    scanInterval: 0.05,      // scheduler wakeup cadence (s) - driven from rAF via accumulator
+    accum: 0,
+    intensity: 0.6,          // 0.6 attract, 1.0 in play (master trim on the score bus)
+    duckUntil: 0,            // ducking window end time
+    padFilter: null,         // shared slow lowpass on the pad bus
+    padBus: null,            // pad voices route here
+    pluckBus: null,          // pluck routes here (cut during dread)
+    shimmerBus: null,        // fifth-above brightness voice bus
+    pedalBus: null,          // dread pedal bus
+    padVoiceGains: [],       // per-pad steady gains (for thinning to one voice)
+    pluckMuted: false,       // cut during falcon warning
+    thinned: false,          // pads thinned to one voice (low flock)
+    brightness: 0,           // 0..1 smoothed combo brightness -> filter open + shimmer
+    targetBrightness: 0,
+    pedalOsc: null,          // active dread pedal oscillator (null when none)
+    pedalGain: null,
+    pedalTrem: null,         // active dread tremolo oscillator
+    currentRoot: 45,
+    resolved: false          // roost / game-over held chord latched
+  };
+
+  function currentChord() {
+    return score.resolved ? PLAGAL_RESOLVE : PROGRESSION[score.chordIdx];
+  }
+
+  // Snap an arbitrary MIDI note to the current scale (used to keep chimes in key).
+  function snapToScale(midi, rootMidi) {
+    var pc = ((midi - rootMidi) % 12 + 12) % 12;
+    var best = SCALE_A_AEOLIAN[0], bestD = 99;
+    for (var i = 0; i < SCALE_A_AEOLIAN.length; i++) {
+      var d = Math.abs(SCALE_A_AEOLIAN[i] - pc);
+      if (d < bestD) { bestD = d; best = SCALE_A_AEOLIAN[i]; }
+    }
+    return midi + (best - pc);
+  }
+
+  function startScore() {
+    if (!audioCtx || score.started) return;
+    score.started = true;
+    var now = audioCtx.currentTime;
+
+    // --- Pad bus: shared slow-moving lowpass, all pad voices summed here ---
+    score.padBus = audioCtx.createGain();
+    score.padBus.gain.value = 1.0;
+    score.padFilter = audioCtx.createBiquadFilter();
+    score.padFilter.type = 'lowpass';
+    score.padFilter.frequency.value = 520;   // base cutoff; opens with brightness
+    score.padFilter.Q.value = 0.7;
+    score.padBus.connect(score.padFilter);
+    score.padFilter.connect(scoreGain);
+
+    // gentle slow LFO wobble on the pad cutoff for a breathing, living pad
+    var padLfo = audioCtx.createOscillator();
+    padLfo.frequency.value = 0.045;
+    var padLfoGain = audioCtx.createGain();
+    padLfoGain.gain.value = 90;
+    padLfo.connect(padLfoGain);
+    padLfoGain.connect(score.padFilter.frequency);
+    padLfo.start(now);
+
+    // --- Three detuned continuous pad voices (droning; pitch is retargeted
+    //     on chord changes). Each voice = 2 slightly-detuned oscillators for
+    //     a soft chorus, saw+triangle mix for warmth. ---
+    score.padVoiceGains = [];
+    score.padVoices = [];
+    var voiceLevels = [0.09, 0.075, 0.06];
+    for (var v = 0; v < 3; v++) {
+      var vg = audioCtx.createGain();
+      vg.gain.value = voiceLevels[v];
+      vg.connect(score.padBus);
+      var oscA = audioCtx.createOscillator();
+      oscA.type = 'sawtooth';
+      var oscB = audioCtx.createOscillator();
+      oscB.type = 'triangle';
+      var mixB = audioCtx.createGain();
+      mixB.gain.value = 0.6;             // triangle a touch under the saw
+      oscA.connect(vg);
+      oscB.connect(mixB);
+      mixB.connect(vg);
+      oscA.start(now);
+      oscB.start(now);
+      score.padVoices.push({ oscA: oscA, oscB: oscB, detune: (v - 1) * 6 });
+      score.padVoiceGains.push({ gain: vg, base: voiceLevels[v] });
+    }
+
+    // --- Shimmer bus: a fifth-above sine voice that fades in with combo brightness ---
+    score.shimmerBus = audioCtx.createGain();
+    score.shimmerBus.gain.value = 0.0001;
+    score.shimmerBus.connect(scoreGain);
+    score.shimmerOsc = audioCtx.createOscillator();
+    score.shimmerOsc.type = 'sine';
+    var shimA = audioCtx.createOscillator();
+    shimA.type = 'sine';
+    shimA.detune.value = 8;               // slight chorus on the shimmer
+    var shimAg = audioCtx.createGain();
+    shimAg.gain.value = 0.5;
+    score.shimmerOsc.connect(score.shimmerBus);
+    shimA.connect(shimAg);
+    shimAg.connect(score.shimmerBus);
+    score.shimmerOsc.start(now);
+    shimA.start(now);
+    score.shimmerOscB = shimA;
+
+    // --- Pluck bus (marsh bell). Cut to near-silence during dread. ---
+    score.pluckBus = audioCtx.createGain();
+    score.pluckBus.gain.value = 1.0;
+    score.pluckBus.connect(scoreGain);
+
+    // --- Pedal bus (dread pedal a half-step below root). ---
+    score.pedalBus = audioCtx.createGain();
+    score.pedalBus.gain.value = 1.0;
+    score.pedalBus.connect(scoreGain);
+
+    // Set the initial chord pitches and schedule timing off the audio clock.
+    score.chordIdx = 0;
+    score.currentRoot = currentChord().root;
+    applyChordPitches(now, 0.05);
+    score.nextChordTime = now + score.chordDur;
+    score.nextPluckTime = now + rand(2.0, 4.0);
+    updateShimmerPitch(now);
+
+    // fade the whole score bus up to its intensity floor
+    var target = (muted ? 0.0001 : score.intensity);
+    scoreGain.gain.setValueAtTime(0.0001, now);
+    scoreGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, target), now + 4.0);
+  }
+
+  // Retarget the three pad voices (and shimmer) to the current chord, gliding
+  // smoothly so voice changes are legato rather than stepped.
+  function applyChordPitches(when, glide) {
+    if (!score.padVoices) return;
+    var ch = currentChord();
+    score.currentRoot = ch.root;
+    for (var v = 0; v < score.padVoices.length; v++) {
+      var pv = score.padVoices[v];
+      var midi = ch.voices[v];
+      var f = mtof(midi);
+      pv.oscA.frequency.setTargetAtTime(f, when, glide);
+      pv.oscB.frequency.setTargetAtTime(f, when, glide);
+      // keep the soft chorus detune per voice
+      pv.oscA.detune.setTargetAtTime(pv.detune - 5, when, glide);
+      pv.oscB.detune.setTargetAtTime(pv.detune + 5, when, glide);
+    }
+    updateShimmerPitch(when);
+  }
+
+  // Shimmer sits a perfect fifth above the chord root.
+  function updateShimmerPitch(when) {
+    if (!score.shimmerOsc) return;
+    var ch = currentChord();
+    var f = mtof(ch.root + 12 + 7); // an octave + a fifth above the low root, airy
+    score.shimmerOsc.frequency.setTargetAtTime(f, when, 0.4);
+    score.shimmerOscB.frequency.setTargetAtTime(f, when, 0.4);
+  }
+
+  // One soft FM "marsh bell" pluck at MIDI note `midi`, quiet, routed to pluckBus.
+  function playPluck(midi, when, vel) {
+    if (!audioCtx || !score.pluckBus) return;
+    var f = mtof(midi);
+    var carrier = audioCtx.createOscillator();
+    carrier.type = 'sine';
+    carrier.frequency.value = f;
+    var mod = audioCtx.createOscillator();
+    mod.type = 'sine';
+    mod.frequency.value = f * 2.01;      // inharmonic-ish ratio for a bell timbre
+    var modGain = audioCtx.createGain();
+    modGain.gain.setValueAtTime(f * 1.4, when);
+    modGain.gain.exponentialRampToValueAtTime(0.001, when + 0.5); // FM index decays fast
+    mod.connect(modGain);
+    modGain.connect(carrier.frequency);
+    var g = audioCtx.createGain();
+    var peak = 0.05 * (vel || 1);
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(peak, when + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 1.6);
+    carrier.connect(g);
+    g.connect(score.pluckBus);
+    mod.start(when);
+    carrier.start(when);
+    mod.stop(when + 1.7);
+    carrier.stop(when + 1.7);
+  }
+
+  // ---- The lookahead scheduler. Called from the frame loop with real dt.
+  //      Uses the AudioContext clock for timing; only allocates when it
+  //      actually spawns an event (chord change, pluck), never per frame. ----
+  function scoreScheduler(dt) {
+    if (!audioCtx || !score.started) return;
+    score.accum += dt;
+    if (score.accum < score.scanInterval) return;
+    score.accum = 0;
+    var now = audioCtx.currentTime;
+    var horizon = now + score.lookahead;
+
+    // smoothly ride the score bus toward its intensity target (minus any duck)
+    if (!muted) {
+      var duckAmt = (now < score.duckUntil) ? 0.5 : 1.0; // -3dB-ish dip
+      var lvl = Math.max(0.0001, score.intensity * duckAmt);
+      score.scoreTargetLevel = lvl;
+      scoreGain.gain.setTargetAtTime(lvl, now, 0.25);
+    }
+
+    // ride the pad filter open with brightness; ride shimmer in/out
+    score.brightness += (score.targetBrightness - score.brightness) * 0.08;
+    if (score.padFilter && !score.resolved) {
+      var cutoff = 480 + score.brightness * 2200; // 480Hz..~2.7kHz
+      score.padFilter.frequency.setTargetAtTime(cutoff, now, 0.4);
+    }
+    if (score.shimmerBus) {
+      var shimLvl = Math.max(0.0001, 0.0001 + score.brightness * 0.05);
+      score.shimmerBus.gain.setTargetAtTime(shimLvl, now, 0.5);
+    }
+
+    // chord change on the audio clock
+    while (score.nextChordTime < horizon) {
+      var when = score.nextChordTime;
+      if (!score.resolved) {
+        score.chordIdx = (score.chordIdx + 1) % PROGRESSION.length;
+      }
+      applyChordPitches(when, 0.6);         // ~0.6s legato glide
+      score.chordDur = rand(10, 15);        // vary the harmonic rhythm a little
+      score.nextChordTime = when + score.chordDur;
+    }
+
+    // sparse pluck events from the current chord's pentatonic subset
+    while (score.nextPluckTime < horizon && !score.pluckMuted && !score.resolved) {
+      var pwhen = score.nextPluckTime;
+      var ch = currentChord();
+      var pool = ch.penta;
+      // sometimes a little 2-3 note phrase, mostly a single note
+      var noteCount = Math.random() < 0.35 ? (2 + (Math.random() < 0.4 ? 1 : 0)) : 1;
+      var step = 0;
+      for (var n = 0; n < noteCount; n++) {
+        var midi = pool[Math.floor(Math.random() * pool.length)];
+        // lift some notes an octave for air, brighter as combo rises
+        if (Math.random() < 0.3 + score.brightness * 0.3) midi += 12;
+        playPluck(midi, pwhen + step, 0.8 + score.brightness * 0.4);
+        step += rand(0.28, 0.5);
+      }
+      score.nextPluckTime = pwhen + rand(4.0, 10.0);
+    }
+  }
+
+  // ---- Reactive hooks (called from game logic) ----
+
+  // Combo brightness: more consecutive rings -> filter opens + shimmer swells.
+  function scoreSetCombo(comboLevel) {
+    score.targetBrightness = clamp(comboLevel / 8, 0, 1);
+  }
+
+  // Attract vs in-play intensity trim on the score bus.
+  function scoreSetIntensity(v) {
+    score.intensity = v;
+  }
+
+  // Falcon warning: drop a low pedal a half-step below the root with slow
+  // tremolo, and cut the pluck voice. Dread.
+  function scoreBeginDread() {
+    if (!audioCtx || !score.pedalBus) return;
+    score.pluckMuted = true;
+    score.pluckBus.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.15);
+    if (score.pedalOsc) return; // already dreading
+    var now = audioCtx.currentTime;
+    var pedalMidi = score.currentRoot - 1; // half-step below root, a leading dissonance
+    var osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = mtof(pedalMidi - 12); // an octave down for a low pedal
+    var lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 220;
+    var g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.11, now + 0.5);
+    // slow tremolo on the pedal
+    var trem = audioCtx.createOscillator();
+    trem.type = 'sine';
+    trem.frequency.value = 5.2;
+    var tremGain = audioCtx.createGain();
+    tremGain.gain.value = 0.045;
+    trem.connect(tremGain);
+    tremGain.connect(g.gain);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(score.pedalBus);
+    osc.start(now);
+    trem.start(now);
+    score.pedalOsc = osc;
+    score.pedalTrem = trem;
+    score.pedalGain = g;
+  }
+
+  // Falcon strike resolved: release the pedal, restore the pluck. If birds
+  // were lost, dip the whole score 3dB for 2s (handled via duckUntil).
+  function scoreEndDread(birdsLost) {
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    if (score.pedalOsc) {
+      score.pedalGain.gain.setTargetAtTime(0.0001, now, 0.6);
+      var oldOsc = score.pedalOsc, oldTrem = score.pedalTrem;
+      try { oldOsc.stop(now + 2.2); } catch (e) {}
+      try { oldTrem.stop(now + 2.2); } catch (e) {}
+      score.pedalOsc = null; score.pedalTrem = null; score.pedalGain = null;
+    }
+    score.pluckMuted = false;
+    if (score.pluckBus) score.pluckBus.gain.setTargetAtTime(1.0, now + 0.3, 0.4);
+    if (birdsLost) score.duckUntil = now + 2.0;
+  }
+
+  // Flock fragility: under 100 birds, thin the pads to a single voice.
+  function scoreSetFragile(fragile) {
+    if (!audioCtx || !score.padVoiceGains.length) return;
+    if (fragile === score.thinned) return;
+    score.thinned = fragile;
+    var now = audioCtx.currentTime;
+    for (var v = 0; v < score.padVoiceGains.length; v++) {
+      var pg = score.padVoiceGains[v];
+      var target = fragile ? (v === 0 ? pg.base : 0.0001) : pg.base;
+      pg.gain.gain.setTargetAtTime(target, now, 0.8);
+    }
+  }
+
+  // Roost / game over: resolve to a held plagal I chord and let it ring/fade
+  // over ~5s under the score card.
+  function scoreResolveRoost() {
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    score.resolved = true;
+    score.pluckMuted = true;
+    // release any pedal, restore pad voices, open filter gently for warmth
+    if (score.pedalOsc) { scoreEndDread(false); }
+    for (var v = 0; v < score.padVoiceGains.length; v++) {
+      var pg = score.padVoiceGains[v];
+      pg.gain.gain.setTargetAtTime(pg.base, now, 1.0);
+    }
+    score.thinned = false;
+    applyChordPitches(now, 1.2);
+    if (score.padFilter) score.padFilter.frequency.setTargetAtTime(1400, now, 1.5);
+    if (score.shimmerBus) score.shimmerBus.gain.setTargetAtTime(0.03, now, 1.5);
+    if (score.pluckBus) score.pluckBus.gain.setTargetAtTime(0.0001, now, 0.6);
+    // let it ring, then fade the whole bus over 5s
+    scoreGain.gain.cancelScheduledValues(now);
+    scoreGain.gain.setValueAtTime(Math.max(0.0001, muted ? 0.0001 : score.intensity), now);
+    scoreGain.gain.setTargetAtTime(0.0001, now + 3.5, 1.6);
+  }
+
+  // Restart from roost/resolved back to a live progression.
+  function scoreResumeProgression() {
+    if (!audioCtx || !score.started) return;
+    var now = audioCtx.currentTime;
+    score.resolved = false;
+    score.pluckMuted = false;
+    score.thinned = false;
+    score.chordIdx = 0;
+    score.targetBrightness = 0;
+    score.brightness = 0;
+    applyChordPitches(now, 0.6);
+    score.nextChordTime = now + score.chordDur;
+    score.nextPluckTime = now + rand(2.0, 4.0);
+    for (var v = 0; v < score.padVoiceGains.length; v++) {
+      var pg = score.padVoiceGains[v];
+      pg.gain.gain.setTargetAtTime(pg.base, now, 0.6);
+    }
+    if (score.pluckBus) score.pluckBus.gain.setTargetAtTime(1.0, now, 0.4);
+    scoreGain.gain.cancelScheduledValues(now);
+    scoreGain.gain.setTargetAtTime(Math.max(0.0001, muted ? 0.0001 : score.intensity), now, 0.8);
+  }
+
+  // Chime for ring threads. Retuned to the CURRENT chord's scale so ring
+  // chimes always harmonize on top of the score. Rises with combo.
   function playChime(comboLevel) {
     if (!audioCtx) return;
-    var idx = clamp(comboLevel, 0, PENTA.length - 1);
-    var base = PENTA[idx];
+    var ch = currentChord();
+    // walk up the current chord's pentatonic subset as the combo climbs, then
+    // spill into octaves so higher combos keep rising in key.
+    var pool = ch.penta;
+    var deg = clamp(comboLevel, 0, 24);
+    var midi = pool[deg % pool.length] + 12 * Math.floor(deg / pool.length);
+    midi = snapToScale(midi, ch.root); // safety: keep it in the mode
+    var base = mtof(midi);
     var now = audioCtx.currentTime;
     [0, 1].forEach(function (h) {
       var freq = base * (h === 0 ? 1 : 2);
@@ -1015,6 +1429,7 @@
     falcon.endY = falcon.startY + (dy / norm) * (norm + overshoot);
 
     playWarningTone();
+    scoreBeginDread();     // low pedal + tremolo, cut the pluck: dread
   }
 
   function updateFalcon(dt, fc) {
@@ -1072,6 +1487,7 @@
       playFeatherThud();
       updateFlockCountUI();
       comboCount = 0;
+      updateHUD(); // reflect the combo break in HUD + score brightness
     }
   }
 
@@ -1080,6 +1496,7 @@
     if (!strikeHitAny && strikeMinDist < KILL_RADIUS * 2.2) {
       slowMoTimer = 0.3;
     }
+    scoreEndDread(strikeHitAny); // release pedal; dip the score 3dB/2s if birds fell
     falcon.state = 'idle';
     falcon.timer = 0;
     falcon.nextStrikeIn = rand(12, 20);
@@ -1164,9 +1581,11 @@
   function updateHUD() {
     document.getElementById('hudRings').textContent = 'Rings ' + ringsThreaded;
     document.getElementById('hudCombo').textContent = 'Combo ' + comboCount;
+    scoreSetCombo(comboCount); // rising combo opens the filter + swells the shimmer
   }
   function updateFlockCountUI() {
     document.getElementById('hudFlock').textContent = boids.length;
+    scoreSetFragile(boids.length < 100); // thin the pads to one voice when the flock is fragile
   }
 
   // ---------- Game flow ----------
@@ -1184,6 +1603,8 @@
     ringSpawnTimer = rand(1.5, 3);
     scheduleFalcon();
     initFlock();
+    scoreSetIntensity(1.0);      // full intensity in play
+    scoreResumeProgression();    // (re)start the living progression from the top
     updateHUD();
     updateFlockCountUI();
     overlayEl.classList.add('hidden');
@@ -1193,6 +1614,7 @@
 
   function endGame() {
     gameState = 'gameover';
+    scoreResolveRoost();         // resolve to a held plagal I chord, ring and fade over ~5s
     if (ringsThreaded > bestScore) bestScore = ringsThreaded;
     document.getElementById('goRings').textContent = 'Rings threaded: ' + ringsThreaded;
     document.getElementById('goBest').textContent = 'Best this session: ' + bestScore;
@@ -1240,6 +1662,10 @@
       slowMoTimer -= dt;
     }
     simTime += effDt;
+
+    // ---- generative score scheduler (lookahead on the audio clock) ----
+    // Uses real dt (not slow-mo'd effDt) so the music keeps its own pulse.
+    scoreScheduler(dt);
 
     // ---- update ----
     var steering = { x: pointer.x, y: pointer.y, strength: 0 };
